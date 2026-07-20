@@ -602,7 +602,7 @@ def get_preview(job_id):
         # ── Before Preview ──
         if preview_type == 'before':
             local_path = mapping.get('local_path', '')
-            if not os.path.exists(local_path):
+            if not local_path or not os.path.exists(local_path):
                 return jsonify({
                     'success': False,
                     'message': 'Original file not found.',
@@ -613,10 +613,19 @@ def get_preview(job_id):
             end = start + limit
             slice_df = df.iloc[start:end]
 
+            # ✅ Convert to dict with NaN handled
+            rows = slice_df.fillna('').to_dict(orient='records')
+            
+            # ✅ Convert all values to string safely
+            rows = [
+                {k: (str(v) if v is not None else '') for k, v in row.items()}
+                for row in rows
+            ]
+
             return jsonify({
                 'success': True,
                 'type': 'before',
-                'rows': slice_df.to_dict(orient='records'),
+                'rows': rows,
                 'columns': df.columns.tolist(),
                 'total_rows': len(df),
                 'page': page,
@@ -637,10 +646,16 @@ def get_preview(job_id):
             end = start + limit
             slice_df = df.iloc[start:end]
 
+            rows = slice_df.fillna('').to_dict(orient='records')
+            rows = [
+                {k: (str(v) if v is not None else '') for k, v in row.items()}
+                for row in rows
+            ]
+
             return jsonify({
                 'success': True,
                 'type': 'after',
-                'rows': slice_df.to_dict(orient='records'),
+                'rows': rows,
                 'columns': df.columns.tolist(),
                 'total_rows': len(df),
                 'page': page,
@@ -672,7 +687,7 @@ def get_preview(job_id):
             }), 400
 
     except Exception as e:
-        logger.error(f"❌ get_preview error: {e}")
+        logger.error(f"❌ get_preview error: {e}", exc_info=True)
         return jsonify({
             'success': False,
             'message': 'Could not generate preview.',
