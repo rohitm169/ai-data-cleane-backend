@@ -1,0 +1,116 @@
+# ============================================
+# .GITIGNORE — AI Data Cleaning Backend
+# GitHub e ei files gulo push hobe na
+# ============================================
+
+
+# ============================================
+# 🔐 ENVIRONMENT VARIABLES
+# Secret keys never push koro
+# ============================================
+.env
+.env.local
+.env.production
+.env.development
+*.env
+
+
+# ============================================
+# 🐍 PYTHON
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.pyc
+*.pyo
+*.pyd
+
+
+# ============================================
+# 📦 VIRTUAL ENVIRONMENT
+# ============================================
+venv/
+env/
+ENV/
+.venv/
+virtualenv/
+
+
+# ============================================
+# 📁 UPLOADED / GENERATED FILES
+# User files store korbe na Git e
+# ============================================
+uploads/
+cleaned/
+reports/
+temp/
+tmp/
+
+
+# ============================================
+# 💾 JOB MAPPING FILE
+# Local job tracking file
+# ============================================
+job_mappings.json
+
+
+# ============================================
+# 📝 LOGS
+# ============================================
+*.log
+logs/
+*.log.*
+
+
+# ============================================
+# 🛠️ IDE / EDITOR
+# ============================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+
+# ============================================
+# 📊 TESTING
+# ============================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+coverage.xml
+*.cover
+
+
+# ============================================
+# 📦 BUILD / DIST
+# ============================================
+build/
+dist/
+*.egg-info/
+*.egg
+
+
+# ============================================
+# 🚀 DEPLOYMENT
+# ============================================
+.railway/
+.vercel/
+*.pid
+*.sock
+
+
+# ============================================
+# 🔒 SENSITIVE FILES
+# ============================================
+credentials.json
+secrets.json
+config.local.py
+*.key
+*.pem
+*.cert
