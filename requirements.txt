@@ -7,3 +7,4 @@ openpyxl==3.1.5
 xlrd==2.0.1
 supabase==2.6.0
 gunicorn==22.0.0
+python-3.11.9
