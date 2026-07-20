@@ -14,6 +14,7 @@ import json
 import logging
 import threading
 from datetime import datetime
+from io import BytesIO
 
 import pandas as pd
 from flask import Blueprint, request, jsonify, current_app
@@ -45,26 +46,9 @@ job_status_tracker = {}
 def start_cleaning():
     """
     Start AI data cleaning process.
-
-    Request Body (JSON):
-        {
-            "job_id": "uuid",
-            "options": {
-                "remove_duplicates": true,
-                "fill_missing": true,
-                "fix_types": true,
-                "standardize_text": true,
-                "remove_outliers": false
-            }
-        }
-
-    Returns:
-        - status, message, job_id
     """
     try:
-        # ─────────────────────────────────
         # Step 1: Parse request
-        # ─────────────────────────────────
         data = request.get_json()
 
         if not data:
@@ -84,9 +68,7 @@ def start_cleaning():
                 'error': 'missing_job_id',
             }), 400
 
-        # ─────────────────────────────────
         # Step 2: Get job info
-        # ─────────────────────────────────
         mapping = FileHandler.get_job_mapping(job_id)
 
         if not mapping:
@@ -105,9 +87,7 @@ def start_cleaning():
                 'error': 'file_not_found',
             }), 404
 
-        # ─────────────────────────────────
         # Step 3: Check if already processing
-        # ─────────────────────────────────
         if job_id in job_status_tracker:
             current_status = job_status_tracker[job_id].get('status')
             if current_status == 'processing':
@@ -117,9 +97,7 @@ def start_cleaning():
                     'error': 'already_processing',
                 }), 409
 
-        # ─────────────────────────────────
         # Step 4: Update status to processing
-        # ─────────────────────────────────
         job_status_tracker[job_id] = {
             'status': 'processing',
             'progress': 0,
@@ -127,7 +105,6 @@ def start_cleaning():
             'started_at': datetime.utcnow().isoformat(),
         }
 
-        # Update DB status
         db = current_app.db
         if db:
             try:
@@ -138,9 +115,7 @@ def start_cleaning():
             except Exception as e:
                 logger.warning(f"⚠️ DB status update failed: {e}")
 
-        # ─────────────────────────────────
         # Step 5: Start cleaning in background
-        # ─────────────────────────────────
         app = current_app._get_current_object()
 
         thread = threading.Thread(
@@ -160,7 +135,7 @@ def start_cleaning():
         }), 200
 
     except Exception as e:
-        logger.error(f"❌ start_cleaning error: {e}")
+        logger.error(f"❌ start_cleaning error: {e}", exc_info=True)
         return jsonify({
             'success': False,
             'message': 'Could not start cleaning process.',
@@ -174,90 +149,64 @@ def start_cleaning():
 def run_cleaning_job(app, job_id, local_path, mapping, options):
     """
     Run cleaning process in background thread.
-    Updates job_status_tracker as it progresses.
     """
     with app.app_context():
+        db = None
         try:
             db = app.db
 
-            # ─────────────────────────────
             # Phase 1: Read file
-            # ─────────────────────────────
             update_job_status(job_id, 5, "Reading file...")
             df = FileHandler.read_file(local_path)
             original_rows, original_cols = df.shape
 
             logger.info(f"📖 File read: {original_rows} rows × {original_cols} cols")
 
-            # ─────────────────────────────
             # Phase 2: Analyze data (before)
-            # ─────────────────────────────
             update_job_status(job_id, 10, "Analyzing data structure...")
             analyzer = DataAnalyzer(df)
             before_analysis = analyzer.analyze()
 
-            logger.info(f"🔍 Analysis complete")
-
-            # ─────────────────────────────
             # Phase 3: Clean data
-            # ─────────────────────────────
             cleaner = DataCleaner(df, options)
 
-            # Step 3a: Remove duplicates
             if options.get('remove_duplicates', True):
                 update_job_status(job_id, 20, "Removing duplicates...")
                 cleaner.remove_duplicates()
-                logger.info(f"🔄 Duplicates removed: {cleaner.stats['duplicates_removed']}")
 
-            # Step 3b: Fill missing values
             if options.get('fill_missing', True):
                 update_job_status(job_id, 35, "Filling missing values...")
                 cleaner.fill_missing_values()
-                logger.info(f"📝 Missing filled: {cleaner.stats['missing_filled']}")
 
-            # Step 3c: Fix data types
             if options.get('fix_types', True):
                 update_job_status(job_id, 50, "Fixing data types...")
                 cleaner.fix_data_types()
-                logger.info(f"🔧 Types fixed: {cleaner.stats['types_fixed']}")
 
-            # Step 3d: Standardize text
             if options.get('standardize_text', True):
                 update_job_status(job_id, 65, "Standardizing text...")
                 cleaner.standardize_text()
-                logger.info(f"✏️ Text standardized: {cleaner.stats['text_standardized']}")
 
-            # Step 3e: Detect outliers
             if options.get('remove_outliers', False):
                 update_job_status(job_id, 75, "Detecting outliers...")
                 cleaner.detect_outliers()
-                logger.info(f"📈 Outliers found: {cleaner.stats['outliers_found']}")
 
-            # ─────────────────────────────
             # Phase 4: Get cleaned dataframe
-            # ─────────────────────────────
             update_job_status(job_id, 80, "Preparing cleaned data...")
             cleaned_df = cleaner.get_cleaned_data()
             cleaned_rows, cleaned_cols = cleaned_df.shape
 
-            # ─────────────────────────────
             # Phase 5: Analyze data (after)
-            # ─────────────────────────────
             update_job_status(job_id, 85, "Analyzing cleaned data...")
             after_analyzer = DataAnalyzer(cleaned_df)
             after_analysis = after_analyzer.analyze()
 
-            # ─────────────────────────────
             # Phase 6: Calculate quality score
-            # ─────────────────────────────
             quality_score = cleaner.calculate_quality_score(
                 before_analysis,
                 after_analysis
             )
 
-            # ─────────────────────────────
             # Phase 7: Save cleaned file
-            # ─────────────────────────────
             update_job_status(job_id, 90, "Saving cleaned file...")
 
             original_name = mapping.get('original_name', 'data.csv')
@@ -272,12 +221,9 @@ def run_cleaning_job(app, job_id, local_path, mapping, options):
             )
 
             cleaned_df.to_csv(cleaned_path, index=False)
-
             logger.info(f"💾 Cleaned file saved: {cleaned_path}")
 
-            # ─────────────────────────────
-            # Phase 8: Upload cleaned file
-            # ─────────────────────────────
+            # Phase 8: Upload cleaned file to storage
             cleaned_url = ""
             if db:
                 try:
@@ -295,10 +241,12 @@ def run_cleaning_job(app, job_id, local_path, mapping, options):
                 except Exception as e:
                     logger.warning(f"⚠️ Cleaned file storage upload failed: {e}")
 
-            # ─────────────────────────────
-            # Phase 9: Build report
-            # ─────────────────────────────
+            # Phase 9: Build report with PREVIEW DATA embedded
             update_job_status(job_id, 95, "Generating report...")
+
+            # ⭐ Save preview data in report (survives server restart)
+            before_preview_rows = df.head(20).fillna('').astype(str).to_dict(orient='records')
+            after_preview_rows = cleaned_df.head(20).fillna('').astype(str).to_dict(orient='records')
 
             report_data = build_report(
                 original_name=original_name,
@@ -312,11 +260,19 @@ def run_cleaning_job(app, job_id, local_path, mapping, options):
                 quality_score=quality_score,
                 column_profiles=after_analyzer.get_column_profiles(),
                 changes=cleaner.get_changes_preview(),
+                before_preview={
+                    'rows': before_preview_rows,
+                    'columns': df.columns.tolist(),
+                    'total_rows': original_rows,
+                },
+                after_preview={
+                    'rows': after_preview_rows,
+                    'columns': cleaned_df.columns.tolist(),
+                    'total_rows': cleaned_rows,
+                },
             )
 
-            # ─────────────────────────────
             # Phase 10: Save to database
-            # ─────────────────────────────
             results = {
                 'cleaned_rows': cleaned_rows,
                 'duplicates_removed': cleaner.stats.get('duplicates_removed', 0),
@@ -347,27 +303,15 @@ def run_cleaning_job(app, job_id, local_path, mapping, options):
                 'status': 'completed',
             })
 
-            # ─────────────────────────────
             # Phase 11: Complete!
-            # ─────────────────────────────
             update_job_status(job_id, 100, "Cleaning completed!")
             job_status_tracker[job_id]['status'] = 'completed'
             job_status_tracker[job_id]['results'] = results
 
-            logger.info(f"""
-            ✅ Cleaning complete: {job_id}
-            ├── Original:  {original_rows} rows
-            ├── Cleaned:   {cleaned_rows} rows
-            ├── Removed:   {cleaner.stats.get('duplicates_removed', 0)} duplicates
-            ├── Filled:    {cleaner.stats.get('missing_filled', 0)} missing
-            ├── Fixed:     {cleaner.stats.get('types_fixed', 0)} types
-            ├── Text:      {cleaner.stats.get('text_standardized', 0)} standardized
-            ├── Outliers:  {cleaner.stats.get('outliers_found', 0)} detected
-            └── Score:     {quality_score}%
-            """)
+            logger.info(f"✅ Cleaning complete: {job_id} — Score: {quality_score}%")
 
         except Exception as e:
-            logger.error(f"❌ Cleaning job failed: {job_id} — {e}")
+            logger.error(f"❌ Cleaning job failed: {job_id} — {e}", exc_info=True)
 
             job_status_tracker[job_id] = {
                 'status': 'failed',
@@ -375,7 +319,6 @@ def run_cleaning_job(app, job_id, local_path, mapping, options):
                 'message': str(e),
             }
 
-            # Update DB
             if db:
                 try:
                     db.update_status(
@@ -415,6 +358,8 @@ def build_report(
     quality_score,
     column_profiles,
     changes,
+    before_preview=None,
+    after_preview=None,
 ):
     """Build complete cleaning report data"""
 
@@ -471,6 +416,10 @@ def build_report(
         'cleaning_log': cleaning_log,
         'column_profiles': column_profiles,
         'changes_preview': changes,
+
+        # ⭐ NEW: Embedded preview data (survives restart)
+        'before_preview': before_preview or {'rows': [], 'columns': [], 'total_rows': 0},
+        'after_preview': after_preview or {'rows': [], 'columns': [], 'total_rows': 0},
     }
 
 
@@ -481,7 +430,6 @@ def build_report(
 def get_cleaning_status(job_id):
     """Check current cleaning job status"""
     try:
-        # Check in-memory tracker
         if job_id in job_status_tracker:
             tracker = job_status_tracker[job_id]
             return jsonify({
@@ -492,7 +440,6 @@ def get_cleaning_status(job_id):
                 'message': tracker.get('message', ''),
             }), 200
 
-        # Check database
         db = current_app.db
         if db:
             job = db.get_job(job_id)
@@ -534,7 +481,6 @@ def get_results(job_id):
         if job_id in job_status_tracker:
             tracker = job_status_tracker[job_id]
             if tracker.get('status') == 'completed':
-                # Get report from local mapping
                 mapping = FileHandler.get_job_mapping(job_id)
                 if mapping and 'report_data' in mapping:
                     return jsonify({
@@ -578,113 +524,203 @@ def get_results(job_id):
 
 
 # ============================================
-# ✅ GET /api/preview/<job_id>
+# ✅ GET /api/preview/<job_id>  ⭐ UPDATED
 # ============================================
 @clean_bp.route('/preview/<job_id>', methods=['GET'])
 def get_preview(job_id):
     """
     Get data preview (before / after / changes)
     Query params: type=before|after|changes, page=1, limit=20
+    
+    ⭐ NEW: Falls back to Supabase Storage & database
+           if local files are missing.
     """
     try:
         preview_type = request.args.get('type', 'before')
         page = int(request.args.get('page', 1))
         limit = int(request.args.get('limit', Config.PREVIEW_ROWS))
 
+        db = current_app.db
         mapping = FileHandler.get_job_mapping(job_id)
+        job_data = None
 
-        if not mapping:
+        # Try to get job from database
+        if db:
+            try:
+                job_data = db.get_job(job_id)
+            except Exception as e:
+                logger.warning(f"⚠️ DB fetch failed: {e}")
+
+        # If neither local nor DB has the job → 404
+        if not mapping and not job_data:
             return jsonify({
                 'success': False,
                 'message': 'Job not found.',
+                'error': 'job_not_found',
             }), 404
 
-        # ── Before Preview ──
+        # ═══════════════════════════════════════
+        # ⭐ TRY 1: Embedded preview from report_data
+        # ═══════════════════════════════════════
+        report_data = None
+        if mapping and mapping.get('report_data'):
+            report_data = mapping['report_data']
+        elif job_data and job_data.get('report_data'):
+            report_data = job_data['report_data']
+
+        if report_data:
+            if preview_type == 'before' and report_data.get('before_preview'):
+                preview = report_data['before_preview']
+                logger.info(f"📋 Serving before preview from embedded data")
+                return jsonify({
+                    'success': True,
+                    'type': 'before',
+                    'rows': preview.get('rows', []),
+                    'columns': preview.get('columns', []),
+                    'total_rows': preview.get('total_rows', 0),
+                    'page': page,
+                    'limit': limit,
+                }), 200
+
+            elif preview_type == 'after' and report_data.get('after_preview'):
+                preview = report_data['after_preview']
+                logger.info(f"📋 Serving after preview from embedded data")
+                return jsonify({
+                    'success': True,
+                    'type': 'after',
+                    'rows': preview.get('rows', []),
+                    'columns': preview.get('columns', []),
+                    'total_rows': preview.get('total_rows', 0),
+                    'page': page,
+                    'limit': limit,
+                }), 200
+
+            elif preview_type == 'changes':
+                changes = report_data.get('changes_preview', [])
+                start = (page - 1) * limit
+                end = start + limit
+                paged_changes = changes[start:end]
+
+                logger.info(f"📋 Serving {len(paged_changes)} changes")
+                return jsonify({
+                    'success': True,
+                    'type': 'changes',
+                    'changes': paged_changes,
+                    'total_changes': len(changes),
+                    'page': page,
+                    'limit': limit,
+                }), 200
+
+        # ═══════════════════════════════════════
+        # TRY 2: Local files
+        # ═══════════════════════════════════════
         if preview_type == 'before':
-            local_path = mapping.get('local_path', '')
-            if not local_path or not os.path.exists(local_path):
-                return jsonify({
-                    'success': False,
-                    'message': 'Original file not found.',
-                }), 404
+            local_path = mapping.get('local_path', '') if mapping else ''
 
-            df = FileHandler.read_file(local_path)
-            start = (page - 1) * limit
-            end = start + limit
-            slice_df = df.iloc[start:end]
+            if local_path and os.path.exists(local_path):
+                try:
+                    df = FileHandler.read_file(local_path)
+                    start = (page - 1) * limit
+                    end = start + limit
+                    slice_df = df.iloc[start:end]
 
-            # ✅ Convert to dict with NaN handled
-            rows = slice_df.fillna('').to_dict(orient='records')
-            
-            # ✅ Convert all values to string safely
-            rows = [
-                {k: (str(v) if v is not None else '') for k, v in row.items()}
-                for row in rows
-            ]
+                    rows = slice_df.fillna('').astype(str).to_dict(orient='records')
 
-            return jsonify({
-                'success': True,
-                'type': 'before',
-                'rows': rows,
-                'columns': df.columns.tolist(),
-                'total_rows': len(df),
-                'page': page,
-                'limit': limit,
-            }), 200
+                    logger.info(f"📋 Serving before preview from local file")
+                    return jsonify({
+                        'success': True,
+                        'type': 'before',
+                        'rows': rows,
+                        'columns': df.columns.tolist(),
+                        'total_rows': len(df),
+                        'page': page,
+                        'limit': limit,
+                    }), 200
+                except Exception as e:
+                    logger.warning(f"⚠️ Local file read failed: {e}")
 
-        # ── After Preview ──
         elif preview_type == 'after':
-            cleaned_path = mapping.get('cleaned_path', '')
-            if not cleaned_path or not os.path.exists(cleaned_path):
-                return jsonify({
-                    'success': False,
-                    'message': 'Cleaned file not found.',
-                }), 404
+            cleaned_path = mapping.get('cleaned_path', '') if mapping else ''
 
-            df = pd.read_csv(cleaned_path)
-            start = (page - 1) * limit
-            end = start + limit
-            slice_df = df.iloc[start:end]
+            if cleaned_path and os.path.exists(cleaned_path):
+                try:
+                    df = pd.read_csv(cleaned_path)
+                    start = (page - 1) * limit
+                    end = start + limit
+                    slice_df = df.iloc[start:end]
 
-            rows = slice_df.fillna('').to_dict(orient='records')
-            rows = [
-                {k: (str(v) if v is not None else '') for k, v in row.items()}
-                for row in rows
-            ]
+                    rows = slice_df.fillna('').astype(str).to_dict(orient='records')
 
-            return jsonify({
-                'success': True,
-                'type': 'after',
-                'rows': rows,
-                'columns': df.columns.tolist(),
-                'total_rows': len(df),
-                'page': page,
-                'limit': limit,
-            }), 200
+                    logger.info(f"📋 Serving after preview from local file")
+                    return jsonify({
+                        'success': True,
+                        'type': 'after',
+                        'rows': rows,
+                        'columns': df.columns.tolist(),
+                        'total_rows': len(df),
+                        'page': page,
+                        'limit': limit,
+                    }), 200
+                except Exception as e:
+                    logger.warning(f"⚠️ Local file read failed: {e}")
 
-        # ── Changes Preview ──
-        elif preview_type == 'changes':
-            report_data = mapping.get('report_data', {})
-            changes = report_data.get('changes_preview', [])
+        # ═══════════════════════════════════════
+        # TRY 3: Download from Supabase Storage
+        # ═══════════════════════════════════════
+        if db and job_data:
+            try:
+                if preview_type == 'before':
+                    file_url = job_data.get('original_file_url', '')
+                    bucket = Config.SUPABASE_UPLOAD_BUCKET
+                elif preview_type == 'after':
+                    file_url = job_data.get('cleaned_file_url', '')
+                    bucket = Config.SUPABASE_CLEANED_BUCKET
+                else:
+                    file_url = ''
+                    bucket = ''
 
-            start = (page - 1) * limit
-            end = start + limit
-            paged_changes = changes[start:end]
+                if file_url:
+                    # Extract filename from URL
+                    file_name = file_url.split('/')[-1].split('?')[0]
 
-            return jsonify({
-                'success': True,
-                'type': 'changes',
-                'changes': paged_changes,
-                'total_changes': len(changes),
-                'page': page,
-                'limit': limit,
-            }), 200
+                    # Download from storage
+                    file_bytes = db.download_file_from_storage(bucket, file_name)
 
-        else:
-            return jsonify({
-                'success': False,
-                'message': 'Invalid preview type. Use: before, after, changes',
-            }), 400
+                    if file_bytes:
+                        # Read into pandas
+                        if file_name.endswith('.csv'):
+                            df = pd.read_csv(BytesIO(file_bytes))
+                        else:
+                            df = pd.read_excel(BytesIO(file_bytes))
+
+                        start = (page - 1) * limit
+                        end = start + limit
+                        slice_df = df.iloc[start:end]
+
+                        rows = slice_df.fillna('').astype(str).to_dict(orient='records')
+
+                        logger.info(f"📋 Serving {preview_type} preview from Supabase Storage")
+                        return jsonify({
+                            'success': True,
+                            'type': preview_type,
+                            'rows': rows,
+                            'columns': df.columns.tolist(),
+                            'total_rows': len(df),
+                            'page': page,
+                            'limit': limit,
+                        }), 200
+
+            except Exception as e:
+                logger.error(f"⚠️ Storage download failed: {e}")
+
+        # ═══════════════════════════════════════
+        # All methods failed
+        # ═══════════════════════════════════════
+        return jsonify({
+            'success': False,
+            'message': f'Could not load {preview_type} preview. File may have been deleted.',
+            'error': 'file_not_available',
+        }), 404
 
     except Exception as e:
         logger.error(f"❌ get_preview error: {e}", exc_info=True)
@@ -702,7 +738,6 @@ def get_preview(job_id):
 def get_report(job_id):
     """Get detailed cleaning report"""
     try:
-        # Local mapping
         mapping = FileHandler.get_job_mapping(job_id)
         if mapping and 'report_data' in mapping:
             return jsonify({
@@ -711,7 +746,6 @@ def get_report(job_id):
                 'report': mapping['report_data'],
             }), 200
 
-        # Database
         db = current_app.db
         if db:
             job = db.get_job(job_id)
@@ -745,7 +779,6 @@ def download_report(job_id):
     try:
         fmt = request.args.get('format', 'json')
 
-        # Get report data
         mapping = FileHandler.get_job_mapping(job_id)
         report_data = None
 
@@ -765,7 +798,6 @@ def download_report(job_id):
             }), 404
 
         if fmt == 'json':
-            # Save report JSON
             report_filename = f"{Config.REPORT_FILE_PREFIX}_{job_id[:8]}.json"
             report_path = os.path.join(Config.REPORTS_FOLDER, report_filename)
 
